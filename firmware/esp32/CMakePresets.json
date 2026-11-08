@@ -12,7 +12,8 @@
       "description": "Development configuration",
       "binaryDir": "build/default",
       "cacheVariables": {
-        "SDKCONFIG": "${sourceDir}/build/default/sdkconfig"
+        "IDF_TARGET": "esp32c6",
+        "SDKCONFIG": "${sourceDir}/sdkconfig"
       },
       "vendor": {
         "espressif/vscode-esp-idf": {
@@ -38,6 +39,7 @@
       "description": "Production configuration",
       "binaryDir": "build/production",
       "cacheVariables": {
+        "IDF_TARGET": "esp32c6",
         "SDKCONFIG": "${sourceDir}/build/production/sdkconfig"
       }
     }
