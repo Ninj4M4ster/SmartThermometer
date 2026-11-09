@@ -119,68 +119,85 @@ esp_err_t MatterManager::create_node()
 
 esp_err_t MatterManager::create_sensor_endpoint()
 {
-    endpoint::temperature_sensor::config_t config{};
+    // ----------------------------------------------
+    // Temperature Sensor endpoint
+    // Device type: 0x0302
+    // Cluster:     0x0402
+    // ----------------------------------------------
 
-    endpoint_t *endpoint =
+    endpoint::temperature_sensor::config_t temperature_config{};
+
+    endpoint_t *temperature_endpoint =
         endpoint::temperature_sensor::create(
             node_,
-            &config,
+            &temperature_config,
             ENDPOINT_FLAG_NONE,
             nullptr
         );
 
-    if (!endpoint) {
-        ESP_LOGE(TAG, "Sensor endpoint creation failed");
+    if (!temperature_endpoint) {
+        ESP_LOGE(TAG, "Temperature endpoint creation failed");
         return ESP_FAIL;
     }
 
-    sensor_endpoint_id_ = endpoint::get_id(endpoint);
+    temperature_endpoint_id_ = endpoint::get_id(temperature_endpoint);
+
+
+    // ----------------------------------------------
+    // Humidity Sensor endpoint
+    // Device type: 0x0307
+    // Cluster:     0x0405
+    // ----------------------------------------------
+
+    endpoint::humidity_sensor::config_t humidity_config{};
+
+    endpoint_t *humidity_endpoint =
+        endpoint::humidity_sensor::create(
+            node_,
+            &humidity_config,
+            ENDPOINT_FLAG_NONE,
+            nullptr
+        );
+
+    if (!humidity_endpoint) {
+        ESP_LOGE(TAG, "Humidity endpoint creation failed");
+        return ESP_FAIL;
+    }
+
+    humidity_endpoint_id_ = endpoint::get_id(humidity_endpoint);
+
+
+    // ----------------------------------------------
+    // Pressure Sensor endpoint
+    // Device type: 0x0305
+    // Cluster:     0x0403
+    // ----------------------------------------------
+
+    endpoint::pressure_sensor::config_t pressure_config{};
+
+    endpoint_t *pressure_endpoint =
+        endpoint::pressure_sensor::create(
+            node_,
+            &pressure_config,
+            ENDPOINT_FLAG_NONE,
+            nullptr
+        );
+
+    if (!pressure_endpoint) {
+        ESP_LOGE(TAG, "Pressure endpoint creation failed");
+        return ESP_FAIL;
+    }
+
+    pressure_endpoint_id_ = endpoint::get_id(pressure_endpoint);
+
 
     ESP_LOGI(
         TAG,
-        "Temperature sensor endpoint created: %u",
-        sensor_endpoint_id_
+        "Environmental endpoints created: T=%u, H=%u, P=%u",
+        temperature_endpoint_id_,
+        humidity_endpoint_id_,
+        pressure_endpoint_id_
     );
-
-
-    // ----------------------------------------------
-    // Relative Humidity Measurement cluster
-    // ----------------------------------------------
-
-    cluster::relative_humidity_measurement::config_t humidity_config{};
-
-    cluster_t *humidity_cluster =
-        cluster::relative_humidity_measurement::create(
-            endpoint,
-            &humidity_config,
-            CLUSTER_FLAG_SERVER
-        );
-
-    if (!humidity_cluster) {
-        ESP_LOGE(TAG, "Humidity cluster creation failed");
-        return ESP_FAIL;
-    }
-
-
-    // ----------------------------------------------
-    // Pressure Measurement cluster
-    // ----------------------------------------------
-
-    cluster::pressure_measurement::config_t pressure_config{};
-
-    cluster_t *pressure_cluster =
-        cluster::pressure_measurement::create(
-            endpoint,
-            &pressure_config,
-            CLUSTER_FLAG_SERVER
-        );
-
-    if (!pressure_cluster) {
-        ESP_LOGE(TAG, "Pressure cluster creation failed");
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(TAG, "Environmental clusters created");
 
     return ESP_OK;
 }
@@ -190,185 +207,167 @@ esp_err_t MatterManager::create_sensor_endpoint()
 // Update Matter sensor values
 // --------------------------------------------------
 
-esp_err_t MatterManager::update_sensor_values(
-    const SensorData &data)
+esp_err_t MatterManager::update_sensor_values(const SensorData &data)
 {
-    if (sensor_endpoint_id_ == 0) {
+    if (temperature_endpoint_id_ == 0 ||
+        humidity_endpoint_id_ == 0 ||
+        pressure_endpoint_id_ == 0) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (data.valid) {
-
-        // Temperature: 0.01 degrees Celsius
-        const float temperature_scaled =
-            data.temperature_celsius * 100.0f;
-
-        // Humidity: 0.01 percent
-        const float humidity_scaled =
-            data.humidity_percent * 100.0f;
-
-        // Pressure Measurement uses kPa.
-        // Convert hPa to kPa.
-        const float pressure_scaled =
-            data.pressure_hpa / 10.0f;
-
-        if (!std::isfinite(temperature_scaled) ||
-            !std::isfinite(humidity_scaled) ||
-            !std::isfinite(pressure_scaled)) {
-            return ESP_ERR_INVALID_ARG;
-        }
-
-        if (temperature_scaled < -32767.0f ||
-            temperature_scaled > 32767.0f ||
-            humidity_scaled < 0.0f ||
-            humidity_scaled > 10000.0f ||
-            pressure_scaled < -32767.0f ||
-            pressure_scaled > 32767.0f) {
-            return ESP_ERR_INVALID_ARG;
-        }
-
-        const int16_t temperature =
-            static_cast<int16_t>(std::lround(temperature_scaled));
-
-        const uint16_t humidity =
-            static_cast<uint16_t>(std::lround(humidity_scaled));
-
-        const int16_t pressure =
-            static_cast<int16_t>(std::lround(pressure_scaled));
-
-
-        // Avoid unnecessary Matter reports.
-        if (has_published_values_ &&
-            temperature == last_temperature_ &&
-            humidity == last_humidity_ &&
-            pressure == last_pressure_) {
-            return ESP_OK;
-        }
-
-        // All Matter data-model operations must execute
-        // with the CHIP stack lock held.
-        lock::ScopedChipStackLock chip_lock(portMAX_DELAY);
-
-
-        // ------------------------------------------
-        // Find Temperature Measurement cluster
-        // ------------------------------------------
-
-        auto *temperature_cluster =
-            static_cast<TemperatureMeasurementCluster *>(
-                data_model::provider::get_instance()
-                    .registry()
-                    .Get(
-                        ConcreteClusterPath(
-                            sensor_endpoint_id_,
-                            TemperatureMeasurement::Id
-                        )
-                    )
-            );
-
-        if (!temperature_cluster) {
-            ESP_LOGE(TAG, "Temperature cluster not found");
-            return ESP_FAIL;
-        }
-
-
-        // ------------------------------------------
-        // Find Relative Humidity Measurement cluster
-        // ------------------------------------------
-
-        auto *humidity_cluster =
-            static_cast<RelativeHumidityMeasurementCluster *>(
-                data_model::provider::get_instance()
-                    .registry()
-                    .Get(
-                        ConcreteClusterPath(
-                            sensor_endpoint_id_,
-                            RelativeHumidityMeasurement::Id
-                        )
-                    )
-            );
-
-        if (!humidity_cluster) {
-            ESP_LOGE(TAG, "Humidity cluster not found");
-            return ESP_FAIL;
-        }
-
-
-        // ------------------------------------------
-        // Find Pressure Measurement cluster
-        // ------------------------------------------
-
-        auto *pressure_cluster =
-            static_cast<PressureMeasurementCluster *>(
-                data_model::provider::get_instance()
-                    .registry()
-                    .Get(
-                        ConcreteClusterPath(
-                            sensor_endpoint_id_,
-                            PressureMeasurement::Id
-                        )
-                    )
-            );
-
-        if (!pressure_cluster) {
-            ESP_LOGE(TAG, "Pressure cluster not found");
-            return ESP_FAIL;
-        }
-
-
-        // ------------------------------------------
-        // Publish measurements
-        // ------------------------------------------
-
-        CHIP_ERROR chip_err;
-
-        chip_err = temperature_cluster->SetMeasuredValue(
-            DataModel::Nullable<int16_t>(temperature)
-        );
-
-        if (chip_err != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG, "Temperature update failed");
-            return ESP_FAIL;
-        }
-
-
-        chip_err = humidity_cluster->SetMeasuredValue(
-            DataModel::Nullable<uint16_t>(humidity)
-        );
-
-        if (chip_err != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG, "Humidity update failed");
-            return ESP_FAIL;
-        }
-
-
-        chip_err = pressure_cluster->SetMeasuredValue(
-            DataModel::Nullable<int16_t>(pressure)
-        );
-
-        if (chip_err != CHIP_NO_ERROR) {
-            ESP_LOGE(TAG, "Pressure update failed");
-            return ESP_FAIL;
-        }
-
-
-        // Cache last published values.
-        last_temperature_ = temperature;
-        last_humidity_ = humidity;
-        last_pressure_ = pressure;
-
-        has_published_values_ = true;
-
-        ESP_LOGI(
-            TAG,
-            "Published T=%.2f C, H=%.2f %%, P=%.1f hPa",
-            data.temperature_celsius,
-            data.humidity_percent,
-            data.pressure_hpa
-        );
-
+    if (!data.valid) {
         return ESP_OK;
     }
+
+    // Matter measurement units
+    const float temperature_scaled = data.temperature_celsius * 100.0f;
+    const float humidity_scaled = data.humidity_percent * 100.0f;
+    const float pressure_scaled = data.pressure_hpa / 10.0f;
+
+    if (!std::isfinite(temperature_scaled) ||
+        !std::isfinite(humidity_scaled) ||
+        !std::isfinite(pressure_scaled)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (temperature_scaled < -32767.0f ||
+        temperature_scaled > 32767.0f ||
+        humidity_scaled < 0.0f ||
+        humidity_scaled > 10000.0f ||
+        pressure_scaled < -32767.0f ||
+        pressure_scaled > 32767.0f) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const int16_t temperature =
+        static_cast<int16_t>(std::lround(temperature_scaled));
+
+    const uint16_t humidity =
+        static_cast<uint16_t>(std::lround(humidity_scaled));
+
+    const int16_t pressure =
+        static_cast<int16_t>(std::lround(pressure_scaled));
+
+    // Skip unchanged values.
+    if (has_published_values_ &&
+        temperature == last_temperature_ &&
+        humidity == last_humidity_ &&
+        pressure == last_pressure_) {
+        return ESP_OK;
+    }
+
+    // Matter data-model operations require the CHIP stack lock.
+    lock::ScopedChipStackLock chip_lock(portMAX_DELAY);
+
+    auto &registry =
+        data_model::provider::get_instance().registry();
+
+    // ----------------------------------------------
+    // Find Temperature Measurement cluster
+    // ----------------------------------------------
+
+    auto *temperature_cluster =
+        static_cast<TemperatureMeasurementCluster *>(
+            registry.Get(
+                ConcreteClusterPath(
+                    temperature_endpoint_id_,
+                    TemperatureMeasurement::Id
+                )
+            )
+        );
+
+    if (!temperature_cluster) {
+        ESP_LOGE(TAG, "Temperature cluster not found");
+        return ESP_FAIL;
+    }
+
+    // ----------------------------------------------
+    // Find Relative Humidity Measurement cluster
+    // ----------------------------------------------
+
+    auto *humidity_cluster =
+        static_cast<RelativeHumidityMeasurementCluster *>(
+            registry.Get(
+                ConcreteClusterPath(
+                    humidity_endpoint_id_,
+                    RelativeHumidityMeasurement::Id
+                )
+            )
+        );
+
+    if (!humidity_cluster) {
+        ESP_LOGE(TAG, "Humidity cluster not found");
+        return ESP_FAIL;
+    }
+
+    // ----------------------------------------------
+    // Find Pressure Measurement cluster
+    // ----------------------------------------------
+
+    auto *pressure_cluster =
+        static_cast<PressureMeasurementCluster *>(
+            registry.Get(
+                ConcreteClusterPath(
+                    pressure_endpoint_id_,
+                    PressureMeasurement::Id
+                )
+            )
+        );
+
+    if (!pressure_cluster) {
+        ESP_LOGE(TAG, "Pressure cluster not found");
+        return ESP_FAIL;
+    }
+
+    // ----------------------------------------------
+    // Publish measurements
+    // ----------------------------------------------
+
+    CHIP_ERROR chip_err;
+
+    chip_err = temperature_cluster->SetMeasuredValue(
+        DataModel::Nullable<int16_t>(temperature)
+    );
+
+    if (chip_err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Temperature update failed: %" CHIP_ERROR_FORMAT,
+                 chip_err.Format());
+        return ESP_FAIL;
+    }
+
+    chip_err = humidity_cluster->SetMeasuredValue(
+        DataModel::Nullable<uint16_t>(humidity)
+    );
+
+    if (chip_err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Humidity update failed: %" CHIP_ERROR_FORMAT,
+                 chip_err.Format());
+        return ESP_FAIL;
+    }
+
+    chip_err = pressure_cluster->SetMeasuredValue(
+        DataModel::Nullable<int16_t>(pressure)
+    );
+
+    if (chip_err != CHIP_NO_ERROR) {
+        ESP_LOGE(TAG, "Pressure update failed: %" CHIP_ERROR_FORMAT,
+                 chip_err.Format());
+        return ESP_FAIL;
+    }
+
+    // Cache only after all three updates succeed.
+    last_temperature_ = temperature;
+    last_humidity_ = humidity;
+    last_pressure_ = pressure;
+    has_published_values_ = true;
+
+    ESP_LOGI(
+        TAG,
+        "Published T=%.2f C, H=%.2f %%, P=%.1f hPa",
+        data.temperature_celsius,
+        data.humidity_percent,
+        data.pressure_hpa
+    );
 
     return ESP_OK;
 }
@@ -378,7 +377,17 @@ esp_err_t MatterManager::update_sensor_values(
 // Get endpoint ID
 // --------------------------------------------------
 
-uint16_t MatterManager::get_endpoint_id() const
+uint16_t MatterManager::get_temperature_endpoint_id() const
 {
-    return sensor_endpoint_id_;
+    return temperature_endpoint_id_;
+}
+
+uint16_t MatterManager::get_humidity_endpoint_id() const
+{
+    return humidity_endpoint_id_;
+}
+
+uint16_t MatterManager::get_pressure_endpoint_id() const
+{
+    return pressure_endpoint_id_;
 }
