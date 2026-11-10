@@ -1,0 +1,11 @@
+{
+    "idf.currentSetup": "/home/jakub_drzewiecki/.espressif/v6.1/esp-idf",
+    "idf.flashType": "UART",
+    "clangd.path": "/home/jakub_drzewiecki/.espressif/tools/esp-clangd/esp-21.1.3_20260408/esp-clangd/bin/clangd",
+    "clangd.arguments": [
+      "--background-index",
+      "--query-driver=**",
+      "--compile-commands-dir=/home/jakub_drzewiecki/HomeMonitoringStation/build/default"
+    ],
+    "idf.port": "/dev/ttyUSB0"
+}

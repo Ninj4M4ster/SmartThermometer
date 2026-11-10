@@ -20,3 +20,17 @@ The first prototype uses:
 ![Image of first prototype](images/first_prototype.jpeg)
 
 The second step of development was usage of esp32-c6 to connect the firmware with Apple Home over Matter.
+
+The ESP32-C6 firmware reads an HTU31 sensor once per second, publishes its
+temperature and relative humidity to Apple Home over Matter, and displays the
+same two readings on a SH1106 128 x 64 I2C OLED. Both devices share the I2C bus
+at 100 kHz:
+
+- SDA: GPIO 6
+- SCL: GPIO 7
+- HTU31 address: `0x40`
+- SH1106 address: `0x3C`
+
+Change `I2C_SDA_GPIO` and `I2C_SCL_GPIO` in `main/app/app.cpp` to match your
+wiring. Use suitable external I2C pull-up resistors if they are not already
+provided by the sensor/display boards.
