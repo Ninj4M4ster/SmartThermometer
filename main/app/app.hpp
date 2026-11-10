@@ -19,4 +19,6 @@ private:
     i2c_master_bus_handle_t i2c_bus_ = nullptr;
     i2c_master_dev_handle_t htu31_device_ = nullptr;
     i2c_master_dev_handle_t sh1106_device_ = nullptr;
+    bool htu31_available_ = false;
+    bool sh1106_available_ = false;
 };

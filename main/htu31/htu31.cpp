@@ -62,21 +62,14 @@ esp_err_t HTU31_Read(
         return err;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(25));
+    // At 100 Hz, 25 ms rounds down to only 20 ms; allow conversion margin.
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     command = HTU31_CMD_READ_T_RH;
-    err = i2c_master_transmit(
+    err = i2c_master_transmit_receive(
         device,
         &command,
         sizeof(command),
-        HTU31_TIMEOUT_MS
-    );
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = i2c_master_receive(
-        device,
         rx_data,
         sizeof(rx_data),
         HTU31_TIMEOUT_MS

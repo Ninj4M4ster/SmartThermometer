@@ -34,14 +34,14 @@ esp_err_t App::init()
         return err;
     }
 
-    if (xTaskCreate(
-            sensor_display_task,
-            "sensor_display",
-            4096,
-            this,
-            4,
-            nullptr
-        ) != pdPASS) {
+    if (htu31_available_ && xTaskCreate(
+                               sensor_display_task,
+                               "sensor_display",
+                               4096,
+                               this,
+                               4,
+                               nullptr
+                           ) != pdPASS) {
 
         return ESP_ERR_NO_MEM;
     }
@@ -81,9 +81,13 @@ esp_err_t App::init_i2c_devices()
     }
 
     err = HTU31_Init(i2c_bus_);
-    if (err != ESP_OK) {
+    if (err == ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(TAG, "HTU31 not found on I2C bus; starting without sensor");
+    } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "HTU31 not found on I2C bus: %s", esp_err_to_name(err));
         return err;
+    } else {
+        htu31_available_ = true;
     }
 
     i2c_device_config_t sh1106_config = {};
@@ -102,12 +106,21 @@ esp_err_t App::init_i2c_devices()
     }
 
     err = SH1106_Init(sh1106_device_);
-    if (err != ESP_OK) {
+    if (err == ESP_ERR_INVALID_RESPONSE) {
+        ESP_LOGW(TAG, "SH1106 not responding on I2C bus; starting without display");
+    } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "SH1106 initialization failed: %s", esp_err_to_name(err));
         return err;
+    } else {
+        sh1106_available_ = true;
     }
 
-    ESP_LOGI(TAG, "HTU31 and SH1106 initialized on I2C");
+    ESP_LOGI(
+        TAG,
+        "I2C initialized; HTU31 %s, SH1106 %s",
+        htu31_available_ ? "available" : "unavailable",
+        sh1106_available_ ? "available" : "unavailable"
+    );
     return ESP_OK;
 }
 
@@ -139,25 +152,26 @@ void App::sensor_display_task(void *arg)
                 );
             }
 
-            const esp_err_t display_err = SH1106_PrintMeasurements(
-                self->sh1106_device_,
-                temperature_celsius,
-                humidity_percent
-            );
-            if (display_err != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "OLED update failed: %s",
-                    esp_err_to_name(display_err)
+            if (self->sh1106_available_) {
+                const esp_err_t display_err = SH1106_PrintMeasurements(
+                    self->sh1106_device_,
+                    temperature_celsius,
+                    humidity_percent
                 );
-            } else {
-                ESP_LOGI(
-                    TAG,
-                    "HTU31: %.2f C, %.2f%% RH",
-                    (double)temperature_celsius,
-                    (double)humidity_percent
-                );
+                if (display_err != ESP_OK) {
+                    ESP_LOGE(
+                        TAG,
+                        "OLED update failed: %s",
+                        esp_err_to_name(display_err)
+                    );
+                }
             }
+            ESP_LOGI(
+                TAG,
+                "HTU31: %.2f C, %.2f%% RH",
+                (double)temperature_celsius,
+                (double)humidity_percent
+            );
         } else {
             ESP_LOGE(TAG, "HTU31 read failed: %s", esp_err_to_name(err));
         }
