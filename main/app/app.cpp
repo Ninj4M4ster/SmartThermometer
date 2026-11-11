@@ -34,14 +34,14 @@ esp_err_t App::init()
         return err;
     }
 
-    if (htu31_available_ && xTaskCreate(
-                               sensor_display_task,
-                               "sensor_display",
-                               4096,
-                               this,
-                               4,
-                               nullptr
-                           ) != pdPASS) {
+    if ((htu31_available_ || sh1106_available_) && xTaskCreate(
+            sensor_display_task,
+            "sensor_display",
+            4096,
+            this,
+            4,
+            nullptr
+        ) != pdPASS) {
 
         return ESP_ERR_NO_MEM;
     }
@@ -113,6 +113,13 @@ esp_err_t App::init_i2c_devices()
         return err;
     } else {
         sh1106_available_ = true;
+        err = SH1106_ShowWelcome(sh1106_device_);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "SH1106 welcome screen failed: %s", esp_err_to_name(err));
+            sh1106_available_ = false;
+        } else {
+            welcome_screen_started_ = xTaskGetTickCount();
+        }
     }
 
     ESP_LOGI(
@@ -128,54 +135,71 @@ void App::sensor_display_task(void *arg)
 {
     auto *self = static_cast<App *>(arg);
     TickType_t last_wake_time = xTaskGetTickCount();
+    bool has_measurement = false;
+    float temperature_celsius = 0.0f;
+    float humidity_percent = 0.0f;
 
     while (true) {
-        float temperature_celsius;
-        float humidity_percent;
-
-        esp_err_t err = HTU31_Read(
-            self->htu31_device_,
-            &temperature_celsius,
-            &humidity_percent
-        );
-        if (err == ESP_OK) {
-            const esp_err_t matter_err =
-                self->matter_manager_.update_sensor_values(
-                    temperature_celsius,
-                    humidity_percent
-                );
-            if (matter_err != ESP_OK) {
-                ESP_LOGE(
-                    TAG,
-                    "Matter sensor update failed: %s",
-                    esp_err_to_name(matter_err)
-                );
-            }
-
-            if (self->sh1106_available_) {
-                const esp_err_t display_err = SH1106_PrintMeasurements(
-                    self->sh1106_device_,
-                    temperature_celsius,
-                    humidity_percent
-                );
-                if (display_err != ESP_OK) {
+        if (self->htu31_available_) {
+            const esp_err_t err = HTU31_Read(
+                self->htu31_device_,
+                &temperature_celsius,
+                &humidity_percent
+            );
+            if (err == ESP_OK) {
+                has_measurement = true;
+                const esp_err_t matter_err =
+                    self->matter_manager_.update_sensor_values(
+                        temperature_celsius,
+                        humidity_percent
+                    );
+                if (matter_err != ESP_OK) {
                     ESP_LOGE(
                         TAG,
-                        "OLED update failed: %s",
-                        esp_err_to_name(display_err)
+                        "Matter sensor update failed: %s",
+                        esp_err_to_name(matter_err)
                     );
                 }
+
+                ESP_LOGI(
+                    TAG,
+                    "HTU31: %.2f C, %.2f%% RH",
+                    (double)temperature_celsius,
+                    (double)humidity_percent
+                );
+            } else {
+                ESP_LOGE(TAG, "HTU31 read failed: %s", esp_err_to_name(err));
             }
-            ESP_LOGI(
-                TAG,
-                "HTU31: %.2f C, %.2f%% RH",
-                (double)temperature_celsius,
-                (double)humidity_percent
-            );
-        } else {
-            ESP_LOGE(TAG, "HTU31 read failed: %s", esp_err_to_name(err));
         }
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(1000));
+        if (self->sh1106_available_) {
+            const TickType_t welcome_duration = pdMS_TO_TICKS(300);
+            const TickType_t elapsed =
+                xTaskGetTickCount() - self->welcome_screen_started_;
+            if (elapsed < welcome_duration) {
+                vTaskDelay(welcome_duration - elapsed);
+            }
+
+            const MatterDiagnosticStatus status =
+                self->matter_manager_.get_diagnostic_status();
+            const esp_err_t display_err = SH1106_PrintMeasurements(
+                self->sh1106_device_,
+                temperature_celsius,
+                humidity_percent,
+                has_measurement,
+                status.sensor_data_ready,
+                status.commissioned,
+                status.subscription_active
+            );
+            if (display_err != ESP_OK) {
+                ESP_LOGE(
+                    TAG,
+                    "OLED update failed: %s",
+                    esp_err_to_name(display_err)
+                );
+            }
+        }
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(5000));
     }
 }

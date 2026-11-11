@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <limits>
+#include <atomic>
 
 #include "esp_log.h"
 #include "esp_matter.h"
@@ -9,6 +10,9 @@
 #include "esp_matter_data_model_provider.h"
 
 #include "nvs_flash.h"
+#include <app/InteractionModelEngine.h>
+#include <app/ReadHandler.h>
+#include <app/server/Server.h>
 
 // Matter cluster implementations
 #include <app/clusters/temperature-measurement-server/TemperatureMeasurementCluster.h>
@@ -28,6 +32,35 @@ using namespace chip::app::Clusters;
 static const char *TAG = "MATTER";
 
 MatterManager matter_manager;
+
+namespace {
+
+std::atomic<uint32_t> active_subscription_count{0};
+
+class SubscriptionStatusCallback final
+    : public chip::app::ReadHandler::ApplicationCallback {
+public:
+    void OnSubscriptionEstablished(chip::app::ReadHandler &) override
+    {
+        active_subscription_count.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void OnSubscriptionTerminated(chip::app::ReadHandler &) override
+    {
+        uint32_t count = active_subscription_count.load(std::memory_order_relaxed);
+        while (count > 0 &&
+               !active_subscription_count.compare_exchange_weak(
+                   count,
+                   count - 1,
+                   std::memory_order_relaxed
+               )) {
+        }
+    }
+};
+
+SubscriptionStatusCallback subscription_status_callback;
+
+} // namespace
 
 
 // --------------------------------------------------
@@ -78,6 +111,9 @@ esp_err_t MatterManager::init()
 
         return err;
     }
+
+    chip::app::InteractionModelEngine::GetInstance()
+        ->RegisterReadHandlerAppCallback(&subscription_status_callback);
 
     ESP_LOGI(TAG, "Matter started successfully");
 
@@ -300,6 +336,17 @@ esp_err_t MatterManager::update_sensor_values(
     );
 
     return ESP_OK;
+}
+
+MatterDiagnosticStatus MatterManager::get_diagnostic_status() const
+{
+    lock::ScopedChipStackLock chip_lock(portMAX_DELAY);
+
+    return {
+        chip::Server::GetInstance().GetFabricTable().FabricCount() > 0,
+        active_subscription_count.load(std::memory_order_relaxed) > 0,
+        has_published_values_
+    };
 }
 
 

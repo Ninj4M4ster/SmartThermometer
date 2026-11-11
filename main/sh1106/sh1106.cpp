@@ -331,10 +331,132 @@ void SH1106_WriteString(
     }
 }
 
+static void draw_pixel(uint8_t x, uint8_t y)
+{
+    if (x >= SH1106_WIDTH || y >= SH1106_HEIGHT)
+        return;
+
+    framebuffer[(y / SH1106_PAGE_HEIGHT) * SH1106_WIDTH + x] |=
+        (uint8_t)(1U << (y % SH1106_PAGE_HEIGHT));
+}
+
+static void draw_filled_rectangle(
+    uint8_t x,
+    uint8_t y,
+    uint8_t width,
+    uint8_t height)
+{
+    for (uint8_t dx = 0; dx < width; dx++)
+    {
+        for (uint8_t dy = 0; dy < height; dy++)
+            draw_pixel(x + dx, y + dy);
+    }
+}
+
+static void draw_line(
+    uint8_t x0,
+    uint8_t y0,
+    uint8_t x1,
+    uint8_t y1)
+{
+    int16_t dx = x1 >= x0 ? x1 - x0 : x0 - x1;
+    int16_t sx = x0 < x1 ? 1 : -1;
+    int16_t dy = y1 >= y0 ? y0 - y1 : y1 - y0;
+    int16_t sy = y0 < y1 ? 1 : -1;
+    int16_t error = dx + dy;
+
+    while (true)
+    {
+        draw_pixel(x0, y0);
+        if (x0 == x1 && y0 == y1)
+            break;
+
+        const int16_t doubled_error = 2 * error;
+        if (doubled_error >= dy)
+        {
+            error += dy;
+            x0 = (uint8_t)(x0 + sx);
+        }
+        if (doubled_error <= dx)
+        {
+            error += dx;
+            y0 = (uint8_t)(y0 + sy);
+        }
+    }
+}
+
+static void draw_connected_icon(uint8_t x, uint8_t y)
+{
+    draw_line(x + 2U, y + 2U, x + 6U, y + 5U);
+    draw_line(x + 10U, y + 2U, x + 6U, y + 5U);
+    draw_line(x + 6U, y + 6U, x + 6U, y + 10U);
+
+    draw_filled_rectangle(x, y, 5U, 3U);
+    draw_filled_rectangle(x + 8U, y, 5U, 3U);
+    draw_filled_rectangle(x + 4U, y + 10U, 5U, 3U);
+    draw_filled_rectangle(x + 5U, y + 4U, 3U, 3U);
+}
+
+static void draw_scaled_string(
+    uint8_t x,
+    uint8_t y,
+    uint8_t scale,
+    const char *str)
+{
+    if (str == NULL || scale == 0U)
+        return;
+
+    while (*str != '\0')
+    {
+        uint8_t glyph[5];
+        get_glyph(*str++, glyph);
+
+        for (uint8_t column = 0; column < 5U; column++)
+        {
+            for (uint8_t row = 0; row < 7U; row++)
+            {
+                if ((glyph[column] & (1U << row)) == 0U)
+                    continue;
+
+                for (uint8_t scale_x = 0; scale_x < scale; scale_x++)
+                {
+                    for (uint8_t scale_y = 0; scale_y < scale; scale_y++)
+                    {
+                        draw_pixel(
+                            x + column * scale + scale_x,
+                            y + row * scale + scale_y
+                        );
+                    }
+                }
+            }
+        }
+
+        x += 6U * scale;
+        if (x >= SH1106_WIDTH)
+            return;
+    }
+}
+
+esp_err_t SH1106_ShowWelcome(i2c_master_dev_handle_t device)
+{
+    if (device == NULL)
+        return ESP_ERR_INVALID_ARG;
+
+    memset(framebuffer, 0, sizeof(framebuffer));
+    SH1106_WriteString(0, 2, "HOME MONITOR");
+    SH1106_WriteString(0, 4, "STARTING...");
+
+    return SH1106_Update(device);
+}
+
 esp_err_t SH1106_PrintMeasurements(
     i2c_master_dev_handle_t device,
     float temperature_celsius,
-    float humidity_percent)
+    float humidity_percent,
+    bool has_measurement,
+    bool matter_data_ready,
+    bool matter_commissioned,
+    bool subscription_active)
 {
     const int32_t temperature_hundredths =
         (int32_t)(temperature_celsius * 100.0f +
@@ -346,28 +468,39 @@ esp_err_t SH1106_PrintMeasurements(
     const uint32_t humidity_hundredths =
         (uint32_t)(humidity_percent * 100.0f + 0.5f);
 
-    char temperature_string[24];
-    char humidity_string[24];
-
-    snprintf(
-        temperature_string,
-        sizeof(temperature_string),
-        "TEMP: %s%ld.%02ld C",
-        temperature_hundredths < 0 ? "-" : "",
-        (long)(temperature_abs / 100),
-        (long)(temperature_abs % 100)
-    );
-    snprintf(
-        humidity_string,
-        sizeof(humidity_string),
-        "HUMIDITY: %lu.%02lu%%",
-        (unsigned long)(humidity_hundredths / 100),
-        (unsigned long)(humidity_hundredths % 100)
-    );
-
     memset(framebuffer, 0, sizeof(framebuffer));
-    SH1106_WriteString(0, 1, temperature_string);
-    SH1106_WriteString(0, 6, humidity_string);
+    SH1106_WriteString(0, 0, "TEMP");
+    SH1106_WriteString(0, 4, "HUMIDITY");
+    draw_line(0, 30, SH1106_WIDTH - 1U, 30);
+
+    if (matter_data_ready && matter_commissioned && subscription_active)
+        draw_connected_icon(SH1106_WIDTH - 14U, 0U);
+
+    if (has_measurement) {
+        char temperature_value[20];
+        char humidity_value[20];
+
+        snprintf(
+            temperature_value,
+            sizeof(temperature_value),
+            "%s%ld.%02ldC",
+            temperature_hundredths < 0 ? "-" : "",
+            (long)(temperature_abs / 100),
+            (long)(temperature_abs % 100)
+        );
+        snprintf(
+            humidity_value,
+            sizeof(humidity_value),
+            "%lu.%02lu%%",
+            (unsigned long)(humidity_hundredths / 100),
+            (unsigned long)(humidity_hundredths % 100)
+        );
+        draw_scaled_string(0, 11, 2, temperature_value);
+        draw_scaled_string(0, 45, 2, humidity_value);
+    } else {
+        draw_scaled_string(0, 11, 2, "--.--");
+        draw_scaled_string(0, 45, 2, "--.--%");
+    }
 
     return SH1106_Update(device);
 }

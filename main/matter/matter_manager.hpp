@@ -5,6 +5,12 @@
 
 #include <cstdint>
 
+struct MatterDiagnosticStatus {
+    bool commissioned;
+    bool subscription_active;
+    bool sensor_data_ready;
+};
+
 class MatterManager {
 public:
     esp_err_t init();
@@ -12,6 +18,8 @@ public:
     esp_err_t update_sensor_values(
         float temperature_celsius,
         float humidity_percent);
+
+    MatterDiagnosticStatus get_diagnostic_status() const;
 
     uint16_t get_temperature_endpoint_id() const;
     uint16_t get_humidity_endpoint_id() const;

@@ -80,6 +80,12 @@ void SH1106_WriteString(uint8_t x, uint8_t page, const char *str);
 esp_err_t SH1106_PrintMeasurements(
     i2c_master_dev_handle_t device,
     float temperature_celsius,
-    float humidity_percent);
+    float humidity_percent,
+    bool has_measurement,
+    bool matter_data_ready,
+    bool matter_commissioned,
+    bool subscription_active);
+
+esp_err_t SH1106_ShowWelcome(i2c_master_dev_handle_t device);
 
 #endif /* SH1106_H */
